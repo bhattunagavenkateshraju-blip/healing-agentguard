@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated developer or DevOps engineer profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Full display name" },
+        "photoURL": { "type": "string", "description": "Avatar URL" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of account creation" },
+        "lastLoginAt": { "type": "string", "description": "ISO timestamp of last sign in" },
+        "role": { "type": "string", "enum": ["admin", "developer", "viewer"], "description": "Role permission level" }
+      },
+      "required": ["id", "email", "createdAt"]
+    },
+    "GlobalMetrics": {
+      "title": "GlobalMetrics",
+      "description": "Aggregated DevOps telemetry metrics for Agent-CI",
+      "type": "object",
+      "properties": {
+        "totalPipelineRuns": { "type": "number", "description": "Total number of pipeline runs executed" },
+        "successRate": { "type": "number", "description": "Overall pipeline success percentage rate" },
+        "pipelineFailures": { "type": "number", "description": "Total count of detected pipeline failures" },
+        "selfHealedFixes": { "type": "number", "description": "Count of successfully autonomous self-healed builds" },
+        "manualFixesAvoided": { "type": "number", "description": "Count of manual developer interventions avoided" },
+        "avgMttrMinutes": { "type": "number", "description": "Average mean-time-to-recovery in minutes" },
+        "lastUpdated": { "type": "string", "description": "ISO timestamp of last metrics update" }
+      },
+      "required": ["totalPipelineRuns", "successRate", "pipelineFailures", "selfHealedFixes"]
+    },
+    "PipelineRunRecord": {
+      "title": "PipelineRunRecord",
+      "description": "Historical pipeline execution and self-healing incident record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique pipeline run ID" },
+        "userId": { "type": "string", "description": "UID of the user who initiated or owns the run" },
+        "repo": { "type": "string", "description": "Target GitHub repository full name" },
+        "branch": { "type": "string", "description": "Git branch name" },
+        "commitSha": { "type": "string", "description": "Commit SHA hash" },
+        "workflowName": { "type": "string", "description": "CI/CD workflow job name" },
+        "status": { "type": "string", "enum": ["healed", "failed", "running", "merged"], "description": "Status of the pipeline run" },
+        "errorSummary": { "type": "string", "description": "Summary of the failure" },
+        "errorCategory": { "type": "string", "description": "Classification of the failure" },
+        "isSelfHealed": { "type": "boolean", "description": "Whether the run was autonomously healed" },
+        "executionTimeMs": { "type": "number", "description": "Agent repair execution time in ms" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation" }
+      },
+      "required": ["id", "repo", "branch", "commitSha", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile documents stored by UID"
+    },
+    "/metrics/global": {
+      "schema": { "$ref": "#/entities/GlobalMetrics" },
+      "description": "Singleton aggregate metrics document for dashboard KPIs"
+    },
+    "/pipelineRuns/{runId}": {
+      "schema": { "$ref": "#/entities/PipelineRunRecord" },
+      "description": "Collection of all pipeline runs and self-healed incidents"
+    }
+  }
+}

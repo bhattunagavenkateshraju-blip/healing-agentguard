@@ -17,7 +17,8 @@ import {
   Cpu, 
   Layers, 
   AlertTriangle,
-  ArrowRight
+  ArrowRight,
+  BarChart3
 } from 'lucide-react';
 import { HealingRun, PipelineStep, CIScenario } from './types/agent';
 import { CI_SCENARIOS } from './data/scenarios';
@@ -31,6 +32,17 @@ import { FailureLab } from './components/FailureLab';
 import { GitHubWorkflowModal } from './components/GitHubWorkflowModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RunHistoryDrawer } from './components/RunHistoryDrawer';
+import { DashboardView } from './components/DashboardView';
+import { 
+  UserProfile, 
+  DashboardMetrics, 
+  DEFAULT_METRICS,
+  subscribeToAuth, 
+  subscribeToGlobalMetrics, 
+  signInWithGoogle, 
+  signOutUser,
+  recordRunInFirestore 
+} from './lib/firebase';
 
 export default function App() {
   const [runs, setRuns] = useState<HealingRun[]>([]);
@@ -39,6 +51,11 @@ export default function App() {
   const [isHealing, setIsHealing] = useState<boolean>(false);
   const [isMerging, setIsMerging] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'diff' | 'pr' | 'terminal'>('diff');
+  const [activeView, setActiveView] = useState<'dashboard' | 'console'>('dashboard');
+
+  // Firebase Auth & Realtime Metrics
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [firestoreMetrics, setFirestoreMetrics] = useState<DashboardMetrics>(DEFAULT_METRICS);
 
   // Modals
   const [isWorkflowOpen, setIsWorkflowOpen] = useState<boolean>(false);
@@ -46,9 +63,9 @@ export default function App() {
   const [isFailureLabOpen, setIsFailureLabOpen] = useState<boolean>(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
 
-  // Stats
+  // Stats for the small bar
   const [stats, setStats] = useState({
-    totalRuns: 148,
+    totalRuns: 168,
     healedCount: 144,
     successRate: 98.6,
     avgMttrReductionMinutes: 41.5,
@@ -58,10 +75,29 @@ export default function App() {
     gpuTotalVramGb: 640.0
   });
 
-  // Load initial runs and stats
+  // Listen to Firebase Auth and Firestore metrics
   useEffect(() => {
+    const unsubAuth = subscribeToAuth((user) => {
+      setCurrentUser(user);
+    });
+
+    const unsubMetrics = subscribeToGlobalMetrics((metrics) => {
+      setFirestoreMetrics(metrics);
+      setStats((prev) => ({
+        ...prev,
+        totalRuns: metrics.totalPipelineRuns,
+        healedCount: metrics.selfHealedFixes,
+        successRate: metrics.successRate
+      }));
+    });
+
     fetchRuns();
     fetchStats();
+
+    return () => {
+      unsubAuth();
+      unsubMetrics();
+    };
   }, []);
 
   const fetchRuns = async () => {
@@ -85,14 +121,30 @@ export default function App() {
       const res = await fetch('/api/stats');
       if (res.ok) {
         const data = await res.json();
-        setStats(data);
+        setStats((prev) => ({ ...prev, ...data }));
       }
     } catch (err) {
       console.warn('Could not fetch stats:', err);
     }
   };
 
-  // Trigger healing workflow with animated progression
+  const handleSignIn = async () => {
+    try {
+      await signInWithGoogle();
+    } catch (e) {
+      console.error('Sign in error:', e);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOutUser();
+    } catch (e) {
+      console.error('Sign out error:', e);
+    }
+  };
+
+  // Trigger healing workflow with animated progression and Firestore persistence
   const handleTriggerHeal = async (scenarioOverride?: CIScenario, customPayload?: any) => {
     setIsHealing(true);
     const targetScenario = scenarioOverride || CI_SCENARIOS[0];
@@ -222,20 +274,35 @@ export default function App() {
       await new Promise((r) => setTimeout(r, 600));
       setSelectedStepId('s5');
 
+      let finalizedRun = optimisticRun;
+
       if (response.ok) {
         const result = await response.json();
         if (result.run) {
+          finalizedRun = result.run;
           setActiveRun(result.run);
           setRuns((prev) => [result.run, ...prev.filter((r) => r.id !== result.run.id)]);
-          setActiveTab('diff');
         }
       } else {
-        // Fallback to fully formatted completed run
         optimisticRun.steps[3].status = 'completed';
         optimisticRun.steps[4].status = 'completed';
         optimisticRun.status = 'healed';
         setActiveRun({ ...optimisticRun });
       }
+
+      // Record in Firestore database for persistence
+      await recordRunInFirestore({
+        id: finalizedRun.id,
+        repo: finalizedRun.repo,
+        branch: finalizedRun.branch,
+        commitSha: finalizedRun.commitSha,
+        workflowName: finalizedRun.workflowName,
+        status: finalizedRun.status as any,
+        errorSummary: finalizedRun.errorSummary,
+        errorCategory: finalizedRun.errorCategory,
+        isSelfHealed: true,
+        executionTimeMs: 4920
+      });
 
       fetchStats();
     } catch (err) {
@@ -259,7 +326,6 @@ export default function App() {
           setRuns((prev) => prev.map((r) => (r.id === data.run.id ? data.run : r)));
         }
       } else {
-        // Optimistic client merge
         if (activeRun.pullRequest) {
           const updated = {
             ...activeRun,
@@ -305,172 +371,211 @@ export default function App() {
         onTriggerHeal={() => handleTriggerHeal()}
         isHealing={isHealing}
         activeRepo={activeRun?.repo || 'acme-corp/cloud-console'}
+        activeView={activeView}
+        onChangeView={(view) => setActiveView(view)}
+        currentUser={currentUser}
+        onSignIn={handleSignIn}
+        onSignOut={handleSignOut}
       />
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1 w-full">
-        {/* KPI Metrics Banner */}
-        <MetricsBar stats={stats} />
+        {/* VIEW 1: DEDICATED METRICS DASHBOARD */}
+        {activeView === 'dashboard' ? (
+          <DashboardView
+            metrics={firestoreMetrics}
+            runs={runs}
+            currentUser={currentUser}
+            onSelectRun={(runId) => {
+              const run = runs.find((r) => r.id === runId);
+              if (run) {
+                setActiveRun(run);
+                setSelectedStepId(run.steps[0]?.id || 's1');
+                setActiveView('console');
+                setActiveTab('diff');
+              }
+            }}
+            onTriggerHeal={() => {
+              handleTriggerHeal();
+              setActiveView('console');
+            }}
+            isHealing={isHealing}
+          />
+        ) : (
+          /* VIEW 2: PIPELINE EXECUTION CONSOLE */
+          <>
+            {/* KPI Metrics Mini Bar */}
+            <MetricsBar stats={stats} />
 
-        {/* Current Active Run Banner */}
-        {activeRun && (
-          <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                  {activeRun.commitSha.substring(0, 7)}
-                </span>
-                <span className="font-bold text-sm text-white">{activeRun.repo}</span>
-                <span className="text-slate-500 text-xs">·</span>
-                <span className="text-xs font-mono text-slate-400">{activeRun.branch}</span>
-                <span className="text-slate-500 text-xs">·</span>
-                <span className="text-xs font-mono text-emerald-400">{activeRun.workflowName}</span>
+            {/* Current Active Run Banner */}
+            {activeRun && (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {activeRun.commitSha.substring(0, 7)}
+                    </span>
+                    <span className="font-bold text-sm text-white">{activeRun.repo}</span>
+                    <span className="text-slate-500 text-xs">·</span>
+                    <span className="text-xs font-mono text-slate-400">{activeRun.branch}</span>
+                    <span className="text-slate-500 text-xs">·</span>
+                    <span className="text-xs font-mono text-emerald-400">{activeRun.workflowName}</span>
+                  </div>
+                  <p className="text-xs text-slate-300 font-mono">
+                    <span className="text-rose-400 font-semibold">[Failure Ingested]</span> {activeRun.errorSummary}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveView('dashboard')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 transition-colors cursor-pointer border border-emerald-800/60"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>View Dashboard</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsHistoryOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer border border-slate-700"
+                  >
+                    <History className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Runs ({runs.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsFailureLabOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer border border-slate-700"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Scenarios</span>
+                  </button>
+                </div>
               </div>
-              <p className="text-xs text-slate-300 font-mono">
-                <span className="text-rose-400 font-semibold">[Failure Ingested]</span> {activeRun.errorSummary}
-              </p>
-            </div>
+            )}
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsHistoryOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer border border-slate-700"
-              >
-                <History className="w-3.5 h-3.5 text-slate-400" />
-                <span>Runs History ({runs.length})</span>
-              </button>
-
-              <button
-                onClick={() => setIsFailureLabOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer border border-slate-700"
-              >
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                <span>Switch Scenario</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Autonomous Pipeline Visualizer */}
-        <PipelineVisualizer
-          steps={activeRun?.steps || []}
-          selectedStepId={selectedStepId}
-          onSelectStep={(id) => setSelectedStepId(id)}
-          isHealing={isHealing}
-          onOpenPR={() => setActiveTab('pr')}
-        />
-
-        {/* Workspace Views (Tabs: Git Diff | Pull Request | Agent Terminal) */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setActiveTab('diff')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  activeTab === 'diff'
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Columns className="w-3.5 h-3.5" />
-                <span>Self-Healed Git Diff</span>
-                {activeRun?.pullRequest && (
-                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded">
-                    +{activeRun.pullRequest.diffStat.additions} -{activeRun.pullRequest.diffStat.deletions}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('pr')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  activeTab === 'pr'
-                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <GitPullRequest className="w-3.5 h-3.5" />
-                <span>Autonomous Pull Request</span>
-                {activeRun?.pullRequest?.status === 'merged' ? (
-                  <span className="text-[10px] font-mono text-purple-400 bg-purple-950 px-1.5 py-0.5 rounded">
-                    MERGED
-                  </span>
-                ) : (
-                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded">
-                    OPEN
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('terminal')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  activeTab === 'terminal'
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Terminal className="w-3.5 h-3.5" />
-                <span>Nebius Agent Terminal</span>
-              </button>
-            </div>
-
-            <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-slate-500">
-              <Cpu className="w-3 h-3 text-emerald-400" />
-              <span>Inference: NVIDIA Llama-3-Nemotron-70B on Nebius</span>
-            </div>
-          </div>
-
-          {/* Active View Container */}
-          {activeTab === 'diff' && (
-            <DiffViewer
-              files={activeRun?.pullRequest?.filesChanged || []}
-              rootCause={activeRun?.pullRequest?.rootCause}
-              fixRationale={activeRun?.pullRequest?.fixStrategy}
-              branchName={activeRun?.pullRequest?.branch}
-            />
-          )}
-
-          {activeTab === 'pr' && (
-            <PullRequestView
-              pr={activeRun?.pullRequest}
-              onMerge={handleMergePR}
-              isMerging={isMerging}
-            />
-          )}
-
-          {activeTab === 'terminal' && (
-            <AgentTerminal
-              currentStep={currentStep}
-              allSteps={activeRun?.steps || []}
-              rawFailureLogs={activeRun?.rawFailureLogs || ''}
+            {/* Autonomous Pipeline Visualizer */}
+            <PipelineVisualizer
+              steps={activeRun?.steps || []}
+              selectedStepId={selectedStepId}
+              onSelectStep={(id) => setSelectedStepId(id)}
               isHealing={isHealing}
+              onOpenPR={() => setActiveTab('pr')}
             />
-          )}
-        </div>
 
-        {/* Live Terminal Stream Bottom Panel (when inspecting Diff or PR) */}
-        {activeTab !== 'terminal' && (
-          <div className="pt-2">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-xs font-semibold font-mono text-slate-300">
-                  Step Output: {currentStep?.name || 'Live Execution Trace'}
-                </span>
+            {/* Workspace Views (Tabs: Git Diff | Pull Request | Agent Terminal) */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab('diff')}
+                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      activeTab === 'diff'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <Columns className="w-3.5 h-3.5" />
+                    <span>Self-Healed Git Diff</span>
+                    {activeRun?.pullRequest && (
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded">
+                        +{activeRun.pullRequest.diffStat.additions} -{activeRun.pullRequest.diffStat.deletions}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setActiveTab('pr')}
+                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      activeTab === 'pr'
+                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <GitPullRequest className="w-3.5 h-3.5" />
+                    <span>Autonomous Pull Request</span>
+                    {activeRun?.pullRequest?.status === 'merged' ? (
+                      <span className="text-[10px] font-mono text-purple-400 bg-purple-950 px-1.5 py-0.5 rounded">
+                        MERGED
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded">
+                        OPEN
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setActiveTab('terminal')}
+                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      activeTab === 'terminal'
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Nebius Agent Terminal</span>
+                  </button>
+                </div>
+
+                <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-slate-500">
+                  <Cpu className="w-3 h-3 text-emerald-400" />
+                  <span>Inference: NVIDIA Llama-3-Nemotron-70B on Nebius</span>
+                </div>
               </div>
-              <span className="text-[11px] font-mono text-slate-500">
-                Click any stage in topology above to focus logs
-              </span>
+
+              {/* Active View Container */}
+              {activeTab === 'diff' && (
+                <DiffViewer
+                  files={activeRun?.pullRequest?.filesChanged || []}
+                  rootCause={activeRun?.pullRequest?.rootCause}
+                  fixRationale={activeRun?.pullRequest?.fixStrategy}
+                  branchName={activeRun?.pullRequest?.branch}
+                />
+              )}
+
+              {activeTab === 'pr' && (
+                <PullRequestView
+                  pr={activeRun?.pullRequest}
+                  onMerge={handleMergePR}
+                  isMerging={isMerging}
+                />
+              )}
+
+              {activeTab === 'terminal' && (
+                <AgentTerminal
+                  currentStep={currentStep}
+                  allSteps={activeRun?.steps || []}
+                  rawFailureLogs={activeRun?.rawFailureLogs || ''}
+                  isHealing={isHealing}
+                />
+              )}
             </div>
 
-            <AgentTerminal
-              currentStep={currentStep}
-              allSteps={activeRun?.steps || []}
-              rawFailureLogs={activeRun?.rawFailureLogs || ''}
-              isHealing={isHealing}
-            />
-          </div>
+            {/* Live Terminal Stream Bottom Panel (when inspecting Diff or PR) */}
+            {activeTab !== 'terminal' && (
+              <div className="pt-2">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-semibold font-mono text-slate-300">
+                      Step Output: {currentStep?.name || 'Live Execution Trace'}
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono text-slate-500">
+                    Click any stage in topology above to focus logs
+                  </span>
+                </div>
+
+                <AgentTerminal
+                  currentStep={currentStep}
+                  allSteps={activeRun?.steps || []}
+                  rawFailureLogs={activeRun?.rawFailureLogs || ''}
+                  isHealing={isHealing}
+                />
+              </div>
+            )}
+          </>
         )}
       </main>
 
@@ -481,9 +586,21 @@ export default function App() {
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
             <span>Agent-CI Cloud Engine</span>
             <span>·</span>
-            <span>Powered by NVIDIA Llama-3-Nemotron-70B on Nebius Cloud</span>
+            <span>Powered by NVIDIA Llama-3-Nemotron-70B on Nebius Cloud & Firebase Firestore</span>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setActiveView('dashboard')}
+              className="hover:text-slate-300 transition-colors cursor-pointer"
+            >
+              Metrics Dashboard
+            </button>
+            <button
+              onClick={() => setActiveView('console')}
+              className="hover:text-slate-300 transition-colors cursor-pointer"
+            >
+              Pipeline Console
+            </button>
             <button
               onClick={() => setIsWorkflowOpen(true)}
               className="hover:text-slate-300 transition-colors cursor-pointer"
@@ -496,12 +613,6 @@ export default function App() {
             >
               Failure Benchmark Lab
             </button>
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              className="hover:text-slate-300 transition-colors cursor-pointer"
-            >
-              Cluster Settings
-            </button>
           </div>
         </div>
       </footer>
@@ -511,8 +622,14 @@ export default function App() {
         isOpen={isFailureLabOpen}
         onClose={() => setIsFailureLabOpen(false)}
         selectedScenarioId={activeRun?.scenarioId || ''}
-        onSelectScenario={(sc) => handleTriggerHeal(sc)}
-        onTriggerCustom={(payload) => handleTriggerHeal(undefined, payload)}
+        onSelectScenario={(sc) => {
+          handleTriggerHeal(sc);
+          setActiveView('console');
+        }}
+        onTriggerCustom={(payload) => {
+          handleTriggerHeal(undefined, payload);
+          setActiveView('console');
+        }}
         isHealing={isHealing}
       />
 
@@ -537,6 +654,7 @@ export default function App() {
           if (run) {
             setActiveRun(run);
             setSelectedStepId(run.steps[0]?.id || 's1');
+            setActiveView('console');
           }
         }}
       />

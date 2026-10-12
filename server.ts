@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -643,8 +643,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`[Agent-CI] Server running at http://localhost:${PORT} (${isDev ? 'development' : 'production'})`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Agent-CI] Server running at http://0.0.0.0:${PORT} (${isDev ? 'development' : 'production'})`);
   });
 }
 
