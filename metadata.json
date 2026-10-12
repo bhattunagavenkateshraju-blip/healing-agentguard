@@ -1,0 +1,6 @@
+{
+  "name": "Agent-CI — Self-Healing DevOps Pipeline",
+  "description": "Autonomous DevOps agent powered by NVIDIA Llama-3-Nemotron-70B on Nebius. Ingests failing CI logs, diagnoses root causes, generates verified code patches, tests them, and opens self-healed Pull Requests.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
