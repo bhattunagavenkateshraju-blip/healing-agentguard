@@ -14,27 +14,25 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // User profiles
+    // User profiles: public read for team display, write restricted to account owner
     match /users/{userId} {
-      allow get: if isAuthenticated();
-      allow list: if isAuthenticated();
+      allow get, list: if true;
       allow create, update: if isValidId(userId) && isOwner(userId);
       allow delete: if false;
     }
 
-    // Global dashboard metrics
+    // Global dashboard metrics: publicly viewable and updatable by pipeline runs
     match /metrics/{metricDoc} {
-      allow get: if true;
-      allow list: if true;
-      allow create, update: if isAuthenticated();
+      allow get, list: if true;
+      allow create, update: if true;
       allow delete: if false;
     }
 
-    // Pipeline Runs collection
+    // Pipeline Runs collection: accessible to all team members and public visitors
     match /pipelineRuns/{runId} {
       allow get, list: if true;
-      allow create: if isValidId(runId) && isAuthenticated();
-      allow update: if isValidId(runId) && isAuthenticated();
+      allow create: if isValidId(runId);
+      allow update: if isValidId(runId);
       allow delete: if false;
     }
   }

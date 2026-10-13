@@ -13,7 +13,8 @@ import {
   LogIn,
   LogOut,
   User,
-  Database
+  Database,
+  UploadCloud
 } from 'lucide-react';
 import { NebiusClusterMetrics } from '../types/agent';
 import { UserProfile } from '../lib/firebase';
@@ -21,6 +22,8 @@ import { UserProfile } from '../lib/firebase';
 interface HeaderProps {
   metrics: NebiusClusterMetrics;
   onOpenWorkflow: () => void;
+  onOpenDeploy: () => void;
+  onOpenVercel: () => void;
   onOpenSettings: () => void;
   onOpenFailureLab: () => void;
   onTriggerHeal: () => void;
@@ -36,6 +39,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   metrics,
   onOpenWorkflow,
+  onOpenDeploy,
+  onOpenVercel,
   onOpenSettings,
   onOpenFailureLab,
   onTriggerHeal,
@@ -154,6 +159,26 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <FileCode className="w-3.5 h-3.5 text-indigo-400" />
             <span>Action YAML</span>
+          </button>
+
+          <button
+            onClick={onOpenDeploy}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 rounded-lg transition-all cursor-pointer"
+            title="Deploy current repository directly to GitHub"
+          >
+            <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline">GitHub</span>
+          </button>
+
+          <button
+            onClick={onOpenVercel}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg transition-all cursor-pointer"
+            title="Deploy to Vercel Cloud"
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+              <path d="M12 2L2 19.7778H22L12 2Z" />
+            </svg>
+            <span className="hidden sm:inline">Vercel</span>
           </button>
 
           <button

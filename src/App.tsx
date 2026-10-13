@@ -33,6 +33,8 @@ import { GitHubWorkflowModal } from './components/GitHubWorkflowModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RunHistoryDrawer } from './components/RunHistoryDrawer';
 import { DashboardView } from './components/DashboardView';
+import { GitHubDeployModal } from './components/GitHubDeployModal';
+import { VercelDeployModal } from './components/VercelDeployModal';
 import { 
   UserProfile, 
   DashboardMetrics, 
@@ -59,6 +61,8 @@ export default function App() {
 
   // Modals
   const [isWorkflowOpen, setIsWorkflowOpen] = useState<boolean>(false);
+  const [isDeployOpen, setIsDeployOpen] = useState<boolean>(false);
+  const [isVercelOpen, setIsVercelOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isFailureLabOpen, setIsFailureLabOpen] = useState<boolean>(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
@@ -366,6 +370,8 @@ export default function App() {
           }
         }
         onOpenWorkflow={() => setIsWorkflowOpen(true)}
+        onOpenDeploy={() => setIsDeployOpen(true)}
+        onOpenVercel={() => setIsVercelOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenFailureLab={() => setIsFailureLabOpen(true)}
         onTriggerHeal={() => handleTriggerHeal()}
@@ -637,6 +643,16 @@ export default function App() {
         isOpen={isWorkflowOpen}
         onClose={() => setIsWorkflowOpen(false)}
         appUrl={window.location.origin}
+      />
+
+      <GitHubDeployModal
+        isOpen={isDeployOpen}
+        onClose={() => setIsDeployOpen(false)}
+      />
+
+      <VercelDeployModal
+        isOpen={isVercelOpen}
+        onClose={() => setIsVercelOpen(false)}
       />
 
       <SettingsModal

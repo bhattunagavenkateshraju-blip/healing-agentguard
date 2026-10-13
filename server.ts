@@ -2,6 +2,8 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import util from 'util';
 import { GoogleGenAI } from '@google/genai';
 import { CI_SCENARIOS } from './src/data/scenarios.ts';
 import { HealingRun, PipelineStep, GitDiffFile, SelfHealedPR } from './src/types/agent.ts';
@@ -625,6 +627,70 @@ jobs:
   res.json({ yaml: yamlContent });
 });
 
+const execAsync = util.promisify(exec);
+
+// Deploy repository to GitHub endpoint
+app.post('/api/git/deploy', async (req: Request, res: Response) => {
+  const { repoUrl, token, branch = 'main' } = req.body;
+  if (!repoUrl) {
+    return res.status(400).json({ error: 'GitHub repository URL is required (e.g. https://github.com/username/agent-ci.git)' });
+  }
+
+  try {
+    let authUrl = repoUrl.trim();
+    if (token) {
+      if (authUrl.startsWith('https://github.com/')) {
+        authUrl = authUrl.replace('https://github.com/', `https://${token}@github.com/`);
+      }
+    }
+
+    // Configure remote
+    await execAsync('git remote remove origin').catch(() => {});
+    await execAsync(`git remote add origin ${authUrl}`);
+
+    // Push branch to remote
+    const { stdout, stderr } = await execAsync(`git push -u origin ${branch} --force`);
+
+    res.json({
+      success: true,
+      message: `Successfully deployed repository to GitHub branch "${branch}"!`,
+      stdout,
+      stderr
+    });
+  } catch (err: any) {
+    console.error('Git deploy error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Git push failed. Ensure repository exists and token has write permission.',
+      details: err.stderr || err.stdout
+    });
+  }
+});
+
+// Deploy repository to Vercel via CLI
+app.post('/api/vercel/deploy', async (req: Request, res: Response) => {
+  const { token, projectName = 'agent-ci' } = req.body;
+  if (!token) {
+    return res.status(400).json({ error: 'Vercel API token is required' });
+  }
+
+  try {
+    const { stdout, stderr } = await execAsync(`npx -y vercel --token "${token.trim()}" --name "${projectName.trim()}" --prod --yes`);
+    res.json({
+      success: true,
+      message: 'Successfully deployed to Vercel production!',
+      output: stdout || stderr
+    });
+  } catch (err: any) {
+    console.error('Vercel CLI deploy error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Vercel deployment failed. Check your token and permissions.',
+      details: err.stderr || err.stdout
+    });
+  }
+});
+
 // Vite middleware in dev or static server in prod
 async function startServer() {
   const isDev = process.env.NODE_ENV !== 'production';
@@ -643,11 +709,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Agent-CI] Server running at http://0.0.0.0:${PORT} (${isDev ? 'development' : 'production'})`);
+  const listenPort = isDev ? 3000 : (Number(process.env.PORT) || 3000);
+  app.listen(listenPort, '0.0.0.0', () => {
+    console.log(`[Agent-CI] Server running at http://0.0.0.0:${listenPort} (${isDev ? 'development' : 'production'})`);
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+  });
+}
+
+export default app;
